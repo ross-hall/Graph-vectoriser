@@ -660,8 +660,15 @@
     <!-- API Key -->
     <div class="api-key-wrap">
       <label>Anthropic API Key</label>
-      <input type="text" id="apiKey" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
-      <div class="note">Key is used client-side only and never stored.</div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" style="flex:1">
+        <button id="toggleKeyVis" title="Show/hide key" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text2);cursor:pointer;padding:6px 8px;font-size:13px;flex-shrink:0;line-height:1">👁</button>
+      </div>
+      <div class="checkbox-row" style="margin-bottom:0;margin-top:2px">
+        <input type="checkbox" id="rememberKey">
+        <label for="rememberKey" style="font-size:11px;color:var(--text3)">Remember on this device</label>
+        <button id="clearKeyBtn" style="margin-left:auto;background:none;border:none;color:var(--text3);cursor:pointer;font-size:10px;font-family:'DM Mono',monospace;padding:0;display:none;text-decoration:underline">forget</button>
+      </div>
     </div>
 
     <!-- Analyse button -->
@@ -946,8 +953,52 @@ function clearAll() {
   analyseBtn.disabled = true;
 }
 
+// ── API Key persistence ───────────────────────────────────────────────────
+const rememberKeyChk = document.getElementById('rememberKey');
+const clearKeyBtn = document.getElementById('clearKeyBtn');
+const toggleKeyVis = document.getElementById('toggleKeyVis');
+
+// Load saved key on startup
+(function() {
+  const saved = localStorage.getItem('graphvec_apikey');
+  if(saved) {
+    apiKeyInput.value = saved;
+    rememberKeyChk.checked = true;
+    clearKeyBtn.style.display = 'inline';
+    analyseBtn.disabled = !uploadedDataUrl;
+  }
+})();
+
 apiKeyInput.addEventListener('input', () => {
   analyseBtn.disabled = !(apiKeyInput.value.trim() && uploadedDataUrl);
+  if(rememberKeyChk.checked && apiKeyInput.value.trim()) {
+    localStorage.setItem('graphvec_apikey', apiKeyInput.value.trim());
+    clearKeyBtn.style.display = 'inline';
+  }
+});
+
+rememberKeyChk.addEventListener('change', () => {
+  if(rememberKeyChk.checked && apiKeyInput.value.trim()) {
+    localStorage.setItem('graphvec_apikey', apiKeyInput.value.trim());
+    clearKeyBtn.style.display = 'inline';
+  } else {
+    localStorage.removeItem('graphvec_apikey');
+    clearKeyBtn.style.display = 'none';
+  }
+});
+
+clearKeyBtn.addEventListener('click', () => {
+  localStorage.removeItem('graphvec_apikey');
+  apiKeyInput.value = '';
+  rememberKeyChk.checked = false;
+  clearKeyBtn.style.display = 'none';
+  analyseBtn.disabled = true;
+});
+
+toggleKeyVis.addEventListener('click', () => {
+  const isPassword = apiKeyInput.type === 'password';
+  apiKeyInput.type = isPassword ? 'text' : 'password';
+  toggleKeyVis.textContent = isPassword ? '🙈' : '👁';
 });
 
 // ── Status helpers ─────────────────────────────────────────────────────────
