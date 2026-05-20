@@ -1183,8 +1183,8 @@ function buildSvg(g, o) {
   // Categorical x: evenly spaced slots
   function catX(i) { return ml + (i + 0.5) * (pw / nCats); }
   // Numeric x
-  function cx(v) { return ml + ((v - xMin) / (xMax - xMin)) * pw; }
-  function cy(v) { return mt + ph - ((v - yMin) / (yMax - yMin)) * ph; }
+  function cx(v) { if(v == null || isNaN(v)) return ml; return ml + ((v - xMin) / (xMax - xMin)) * pw; }
+  function cy(v) { if(v == null || isNaN(v)) return mt + ph; return mt + ph - ((v - yMin) / (yMax - yMin)) * ph; }
 
   const dashMap = { solid: 'none', dashed: `${o.lineThickness*3},${o.lineThickness*2}`, dotted: `${o.lineThickness},${o.lineThickness*2}` };
   const dash = dashMap[o.lineStyle] || 'none';
@@ -1202,14 +1202,14 @@ function buildSvg(g, o) {
         s += `<line x1="${x}" y1="${mt}" x2="${x}" y2="${mt+ph}" stroke="${o.gridColor}" stroke-width="1"/>`;
       }
     } else {
-      const xTicks = g.xAxis?.ticks || linspace(xMin, xMax, 6);
+      const xTicks = (g.xAxis?.ticks || linspace(xMin, xMax, 6)).filter(t => t != null && !isNaN(t));
       xTicks.forEach(t => {
         const x = cx(t);
         if(x >= ml - 1 && x <= ml + pw + 1)
           s += `<line x1="${x}" y1="${mt}" x2="${x}" y2="${mt+ph}" stroke="${o.gridColor}" stroke-width="1"/>`;
       });
     }
-    const yTicks = g.yAxis?.ticks || linspace(yMin, yMax, 6);
+    const yTicks = (g.yAxis?.ticks || linspace(yMin, yMax, 6)).filter(t => t != null && !isNaN(t));
     yTicks.forEach(t => {
       const y = cy(t);
       if(y >= mt - 1 && y <= mt + ph + 1)
@@ -1317,7 +1317,7 @@ function buildSvg(g, o) {
           }
         });
       } else {
-        const xTicks = g.xAxis?.ticks || linspace(xMin, xMax, 6);
+        const xTicks = (g.xAxis?.ticks || linspace(xMin, xMax, 6)).filter(t => t != null && !isNaN(t));
         xTicks.forEach(t => {
           const x = cx(t);
           s += `<line x1="${x}" y1="${mt+ph}" x2="${x}" y2="${mt+ph+5}" stroke="${o.axisColor}" stroke-width="1"/>`;
@@ -1326,7 +1326,7 @@ function buildSvg(g, o) {
       }
 
       // Y ticks
-      const yTicks = g.yAxis?.ticks || linspace(yMin, yMax, 6);
+      const yTicks = (g.yAxis?.ticks || linspace(yMin, yMax, 6)).filter(t => t != null && !isNaN(t));
       yTicks.forEach(t => {
         const y = cy(t);
         s += `<line x1="${ml-5}" y1="${y}" x2="${ml}" y2="${y}" stroke="${o.axisColor}" stroke-width="1"/>`;
@@ -1386,6 +1386,7 @@ function linspace(a, b, n) {
 }
 
 function fmt(n) {
+  if(n == null || isNaN(n) || typeof n !== 'number') return String(n ?? '');
   if(Math.abs(n) >= 1e5 || (Math.abs(n) < 0.01 && n !== 0)) return n.toExponential(1);
   if(Number.isInteger(n)) return n.toString();
   return (+n.toPrecision(4)).toString();
