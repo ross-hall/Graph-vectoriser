@@ -695,6 +695,26 @@
           <option value="area">Area chart</option>
         </select>
       </div>
+      <div class="control-row" style="margin-top:4px">
+        <label class="control-label">Preset size</label>
+        <select id="sizePreset" style="max-width:140px">
+          <option value="custom">Custom</option>
+          <option value="16:9" selected>16:9 — Slide</option>
+          <option value="4:3">4:3 — Classic</option>
+          <option value="1:1">1:1 — Square</option>
+          <option value="3:2">3:2 — Photo</option>
+          <option value="2:1">2:1 — Wide</option>
+          <option value="golden">Golden ratio</option>
+        </select>
+      </div>
+      <div class="control-row">
+        <label class="control-label">Width (px)</label>
+        <input type="number" id="svgWidth" value="700" min="200" max="2000" step="10" style="max-width:80px">
+      </div>
+      <div class="control-row">
+        <label class="control-label">Height (px)</label>
+        <input type="number" id="svgHeight" value="394" min="150" max="2000" step="10" style="max-width:80px">
+      </div>
     </div>
 
     <!-- Axes -->
@@ -863,6 +883,36 @@ const swatchRow = document.getElementById('swatchRow');
 ['showAxes','showGrid','showLabels','showLegend','showErrorBars','showDataPoints',
  'graphType','lineStyle','markerShape','bgColor','axisColor','gridColor','fontFamily'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => { if(parsedGraph) regenerateSvg(); });
+});
+
+// ── Size preset + custom W/H ───────────────────────────────────────────────
+const PRESETS = {
+  '16:9':   [700, 394],
+  '4:3':    [700, 525],
+  '1:1':    [600, 600],
+  '3:2':    [700, 467],
+  '2:1':    [700, 350],
+  'golden': [700, 433],
+};
+
+const sizePreset = document.getElementById('sizePreset');
+const svgWidthEl = document.getElementById('svgWidth');
+const svgHeightEl = document.getElementById('svgHeight');
+
+sizePreset.addEventListener('change', () => {
+  const p = PRESETS[sizePreset.value];
+  if(p) {
+    svgWidthEl.value = p[0];
+    svgHeightEl.value = p[1];
+    if(parsedGraph) regenerateSvg();
+  }
+});
+
+[svgWidthEl, svgHeightEl].forEach(el => {
+  el.addEventListener('change', () => {
+    sizePreset.value = 'custom';
+    if(parsedGraph) regenerateSvg();
+  });
 });
 
 document.getElementById('seriesColor').addEventListener('input', e => {
@@ -1150,6 +1200,8 @@ function getStyleOpts() {
     fontSize: parseInt(document.getElementById('fontSize').value),
     fontFamily: document.getElementById('fontFamily').value,
     palette: [...seriesPalette],
+    svgWidth: parseInt(document.getElementById('svgWidth').value) || 700,
+    svgHeight: parseInt(document.getElementById('svgHeight').value) || 394,
   };
 }
 
@@ -1163,7 +1215,7 @@ function regenerateSvg() {
 }
 
 function buildSvg(g, o) {
-  const W = 700, H = 480;
+  const W = o.svgWidth || 700, H = o.svgHeight || 394;
   const ml = 72, mr = 30, mt = 50, mb = 60;
   const legH = (o.showLegend && g.series?.length > 0) ? 30 : 0;
   const pw = W - ml - mr;
