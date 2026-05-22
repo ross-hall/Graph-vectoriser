@@ -691,7 +691,8 @@
           <option value="auto">Auto-detect</option>
           <option value="line">Line chart</option>
           <option value="scatter">Scatter plot</option>
-          <option value="bar">Bar chart</option>
+          <option value="bar">Bar chart (grouped)</option>
+          <option value="stacked-bar">Bar chart (stacked)</option>
           <option value="area">Area chart</option>
         </select>
       </div>
@@ -1085,7 +1086,8 @@ async function analyseGraph() {
 
 {
   "title": "graph title if visible, else null",
-  "graphType": "line|scatter|bar|area",
+  "graphType": "line|scatter|bar|stacked-bar|area",
+  "dualAxis": true_or_false,
   "xAxis": {
     "label": "x axis title/label text or null",
     "unit": "unit if visible or null",
@@ -1094,17 +1096,25 @@ async function analyseGraph() {
     "ticks": [list of numeric tick values, or null if categorical]
   },
   "yAxis": {
-    "label": "y axis title/label text or null",
+    "label": "left y axis title/label text or null",
     "unit": "unit if visible or null",
     "min": number,
     "max": number,
     "ticks": [list of numeric tick values]
+  },
+  "yAxisRight": {
+    "label": "right y axis title/label text or null (set to null if no right axis)",
+    "unit": "unit if visible or null",
+    "min": number_or_null,
+    "max": number_or_null,
+    "ticks": [list of numeric tick values, or null if no right axis]
   },
   "categories": ["label1", "label2", ...] or null,
   "series": [
     {
       "name": "series name from legend or 'Series 1'",
       "color": "detected hex color e.g. #2563eb or null",
+      "yAxis": "left or right",
       "points": [
         {
           "x": number_or_category_index,
@@ -1120,10 +1130,11 @@ async function analyseGraph() {
 }
 
 CRITICAL RULES:
-1. For BAR CHARTS: the x-axis uses category labels (strings like "Control", "Treatment A", etc.), NOT numbers. Set "categories" to the ordered list of all category names. Set each point's "label" to its category string and "x" to its 0-based index.
+1. For BAR CHARTS (bar or stacked-bar): the x-axis uses category labels (strings like "Control", "Treatment A", etc.), NOT numbers. Set "categories" to the ordered list of all category names. Set each point's "label" to its category string and "x" to its 0-based index. IMPORTANT: if bars are stacked on top of each other (segments forming a single tall column per category), use graphType "stacked-bar". If bars are placed side-by-side per category, use "bar". For stacked bars, each series "y" value is the actual segment value (not cumulative) — report the raw size of each coloured segment.
 2. ERROR BARS: Inspect very carefully for error bars — these are vertical (and sometimes horizontal) lines extending above and below data points or bar tops, usually with small horizontal caps at the ends. They represent uncertainty/SD/SEM/CI. If you see them, you MUST report them. "errorY" is the half-height of the bar in data units (i.e. the distance from the point centre to the cap tip, read from the y-axis scale). Do not set errorY to null if error bars are visible.
-3. Be precise: read all values carefully against the axis scales.
-4. Extract ALL data series and ALL data points.`;
+3. DUAL Y-AXIS: If the graph has both a left and a right y-axis with different scales (common in combo charts mixing e.g. bar and line), set "dualAxis" to true, populate "yAxisRight" fully, and set each series' "yAxis" to "left" or "right" based on which axis its values correspond to. If there is only one y-axis, set "dualAxis" to false and "yAxisRight" to null.
+4. Be precise: read all values carefully against the axis scales.
+5. Extract ALL data series and ALL data points.`;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1216,7 +1227,8 @@ function regenerateSvg() {
 
 function buildSvg(g, o) {
   const W = o.svgWidth || 700, H = o.svgHeight || 394;
-  const ml = 72, mr = 30, mt = 50, mb = 60;
+  const hasDual = !!(g.dualAxis && g.yAxisRight?.min != null);
+  const ml = 72, mr = hasDual ? 72 : 36, mt = 50, mb = 60;
   const legH = (o.showLegend && g.series?.length > 0) ? 30 : 0;
   const pw = W - ml - mr;
   const ph = H - mt - mb - legH;
@@ -1229,14 +1241,25 @@ function buildSvg(g, o) {
 
   const xMin = g.xAxis?.min ?? 0;
   const xMax = g.xAxis?.max ?? 10;
+  // Left axis
   const yMin = g.yAxis?.min ?? 0;
   const yMax = g.yAxis?.max ?? 10;
+  // Right axis
+  const yMinR = g.yAxisRight?.min ?? 0;
+  const yMaxR = g.yAxisRight?.max ?? 10;
 
   // Categorical x: evenly spaced slots
   function catX(i) { return ml + (i + 0.5) * (pw / nCats); }
   // Numeric x
   function cx(v) { if(v == null || isNaN(v)) return ml; return ml + ((v - xMin) / (xMax - xMin)) * pw; }
+  // Left y
   function cy(v) { if(v == null || isNaN(v)) return mt + ph; return mt + ph - ((v - yMin) / (yMax - yMin)) * ph; }
+  // Right y
+  function cyR(v) { if(v == null || isNaN(v)) return mt + ph; return mt + ph - ((v - yMinR) / (yMaxR - yMinR)) * ph; }
+  // Pick correct cy for a series
+  function cyFor(ser, v) { return (hasDual && ser.yAxis === 'right') ? cyR(v) : cy(v); }
+  function yMinFor(ser) { return (hasDual && ser.yAxis === 'right') ? yMinR : yMin; }
+  function yMaxFor(ser) { return (hasDual && ser.yAxis === 'right') ? yMaxR : yMax; }
 
   const dashMap = { solid: 'none', dashed: `${o.lineThickness*3},${o.lineThickness*2}`, dotted: `${o.lineThickness},${o.lineThickness*2}` };
   const dash = dashMap[o.lineStyle] || 'none';
@@ -1277,39 +1300,45 @@ function buildSvg(g, o) {
       const col = o.palette[si % o.palette.length];
       const pts = ser.points || [];
 
-      if(gtype === 'bar') {
-        // Categorical bars: slot width divided by number of series
+      if(gtype === 'bar' || gtype === 'stacked-bar') {
         const slotW = cats ? pw / nCats : pw / Math.max(pts.length, 1);
         const groupPad = slotW * 0.15;
-        const bw = Math.max(4, (slotW - groupPad * 2) / nSeries - 2);
-        const groupOff = (si - (nSeries - 1) / 2) * (bw + 2);
 
-        pts.forEach((p, pi) => {
-          const centreX = cats ? catX(p.x ?? pi) : cx(p.x ?? pi);
-          const bx = centreX + groupOff - bw / 2;
-          const by = cy(p.y);
-          const bh = cy(yMin) - by;
-          s += `<rect x="${bx.toFixed(2)}" y="${by.toFixed(2)}" width="${bw.toFixed(2)}" height="${bh.toFixed(2)}" fill="${col}" fill-opacity="0.85" clip-path="url(#plot)"/>`;
+        if(gtype === 'stacked-bar') {
+          // Stacked: drawn after all series are iterated — skip per-series, handle below
+          // (stacked rendering is done in a separate pass after this loop)
+        } else {
+          // Grouped bars
+          const bw = Math.max(4, (slotW - groupPad * 2) / nSeries - 2);
+          const groupOff = (si - (nSeries - 1) / 2) * (bw + 2);
 
-          // Error bars on bars
-          if(o.showErrorBars && p.errorY != null) {
-            const px = centreX + groupOff;
-            const ey = (p.errorY / (yMax - yMin)) * ph;
-            const capW = Math.min(bw * 0.4, 6);
-            s += `<g clip-path="url(#plot)" stroke="${col}" stroke-width="${Math.max(1, o.lineThickness * 0.8)}">`;
-            s += `<line x1="${px.toFixed(2)}" y1="${(by - ey).toFixed(2)}" x2="${px.toFixed(2)}" y2="${(by + ey).toFixed(2)}"/>`;
-            s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by-ey).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(by-ey).toFixed(2)}"/>`;
-            s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by+ey).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(by+ey).toFixed(2)}"/>`;
-            s += `</g>`;
-          }
-        });
+          pts.forEach((p, pi) => {
+            const centreX = cats ? catX(p.x ?? pi) : cx(p.x ?? pi);
+            const bx = centreX + groupOff - bw / 2;
+            const by = cyFor(ser, p.y);
+            const bh = cyFor(ser, yMinFor(ser)) - by;
+            s += `<rect x="${bx.toFixed(2)}" y="${by.toFixed(2)}" width="${bw.toFixed(2)}" height="${bh.toFixed(2)}" fill="${col}" fill-opacity="0.85" clip-path="url(#plot)"/>`;
+
+            // Error bars on grouped bars
+            if(o.showErrorBars && p.errorY != null) {
+              const px = centreX + groupOff;
+              const ey = (p.errorY / (yMaxFor(ser) - yMinFor(ser))) * ph;
+              const capW = Math.min(bw * 0.4, 6);
+              s += `<g clip-path="url(#plot)" stroke="${col}" stroke-width="${Math.max(1, o.lineThickness * 0.8)}">`;
+              s += `<line x1="${px.toFixed(2)}" y1="${(by - ey).toFixed(2)}" x2="${px.toFixed(2)}" y2="${(by + ey).toFixed(2)}"/>`;
+              s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by-ey).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(by-ey).toFixed(2)}"/>`;
+              s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by+ey).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(by+ey).toFixed(2)}"/>`;
+              s += `</g>`;
+            }
+          });
+        }
 
       } else {
         // Line / scatter / area — numeric x
         if(pts.length > 1 && (gtype === 'line' || gtype === 'area')) {
-          const pathD = pts.map((p,i) => `${i===0?'M':'L'}${cx(p.x).toFixed(2)},${cy(p.y).toFixed(2)}`).join(' ');
+          const pathD = pts.map((p,i) => `${i===0?'M':'L'}${cx(p.x).toFixed(2)},${cyFor(ser,p.y).toFixed(2)}`).join(' ');
           if(gtype === 'area') {
-            const aD = pathD + ` L${cx(pts[pts.length-1].x).toFixed(2)},${cy(yMin).toFixed(2)} L${cx(pts[0].x).toFixed(2)},${cy(yMin).toFixed(2)} Z`;
+            const aD = pathD + ` L${cx(pts[pts.length-1].x).toFixed(2)},${cyFor(ser,yMinFor(ser)).toFixed(2)} L${cx(pts[0].x).toFixed(2)},${cyFor(ser,yMinFor(ser)).toFixed(2)} Z`;
             s += `<path d="${aD}" fill="${col}" fill-opacity="0.15" clip-path="url(#plot)"/>`;
           }
           s += `<path d="${pathD}" fill="none" stroke="${col}" stroke-width="${o.lineThickness}" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="${dash}" clip-path="url(#plot)"/>`;
@@ -1318,10 +1347,10 @@ function buildSvg(g, o) {
         // Error bars (line/scatter)
         if(o.showErrorBars) {
           pts.forEach(p => {
-            const px = cx(p.x), py = cy(p.y);
+            const px = cx(p.x), py = cyFor(ser, p.y);
             const capW = 5;
             if(p.errorY != null) {
-              const ey = (p.errorY / (yMax - yMin)) * ph;
+              const ey = (p.errorY / (yMaxFor(ser) - yMinFor(ser))) * ph;
               s += `<g clip-path="url(#plot)" stroke="${col}" stroke-width="${Math.max(1, o.lineThickness * 0.75)}">`;
               s += `<line x1="${px.toFixed(2)}" y1="${(py-ey).toFixed(2)}" x2="${px.toFixed(2)}" y2="${(py+ey).toFixed(2)}"/>`;
               s += `<line x1="${(px-capW).toFixed(2)}" y1="${(py-ey).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(py-ey).toFixed(2)}"/>`;
@@ -1342,11 +1371,52 @@ function buildSvg(g, o) {
         // Markers
         if(o.showDataPoints) {
           pts.forEach(p => {
-            s += markerSvg(cx(p.x), cy(p.y), o.markerSize, o.markerShape, col);
+            s += markerSvg(cx(p.x), cyFor(ser, p.y), o.markerSize, o.markerShape, col);
           });
         }
       }
     });
+  }
+
+  // ── Stacked bar rendering pass ──────────────────────────────────────────
+  if(gtype === 'stacked-bar' && g.series) {
+    const nCatsLocal = cats ? nCats : (g.series[0]?.points?.length || 1);
+    const slotW = pw / nCatsLocal;
+    const groupPad = slotW * 0.15;
+    const bw = Math.max(6, slotW - groupPad * 2);
+
+    // Build cumulative stack per category index
+    const nPts = g.series[0]?.points?.length || 0;
+    for(let pi = 0; pi < nPts; pi++) {
+      let cumulative = yMin;
+      g.series.forEach((ser, si) => {
+        const col = o.palette[si % o.palette.length];
+        const p = ser.points[pi];
+        if(!p) return;
+        const val = p.y ?? 0;
+        const centreX = cats ? catX(p.x ?? pi) : cx(p.x ?? pi);
+        const bx = centreX - bw / 2;
+        const by = cyFor(ser, cumulative + val);
+        const bh = cyFor(ser, cumulative) - by;
+        s += `<rect x="${bx.toFixed(2)}" y="${by.toFixed(2)}" width="${bw.toFixed(2)}" height="${Math.max(0,bh).toFixed(2)}" fill="${col}" fill-opacity="0.9" clip-path="url(#plot)"/>`;
+        // Subtle separator line between segments
+        if(si > 0 && bh > 1) {
+          s += `<line x1="${bx.toFixed(2)}" y1="${by.toFixed(2)}" x2="${(bx+bw).toFixed(2)}" y2="${by.toFixed(2)}" stroke="${o.bgColor}" stroke-width="1.5" clip-path="url(#plot)"/>`;
+        }
+        // Error bars on top segment only (last series)
+        if(o.showErrorBars && p.errorY != null && si === g.series.length - 1) {
+          const px = centreX;
+          const ey = (p.errorY / (yMaxFor(ser) - yMinFor(ser))) * ph;
+          const capW = Math.min(bw * 0.3, 6);
+          s += `<g clip-path="url(#plot)" stroke="${col}" stroke-width="${Math.max(1, o.lineThickness * 0.8)}">`;
+          s += `<line x1="${px.toFixed(2)}" y1="${(by - ey).toFixed(2)}" x2="${px.toFixed(2)}" y2="${(by + ey).toFixed(2)}"/>`;
+          s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by-ey).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(by-ey).toFixed(2)}"/>`;
+          s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by+ey).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(by+ey).toFixed(2)}"/>`;
+          s += `</g>`;
+        }
+        cumulative += val;
+      });
+    }
   }
 
   // ── Axes ─────────────────────────────────────────────────────────────────
@@ -1392,6 +1462,23 @@ function buildSvg(g, o) {
       if(g.yAxis?.label) {
         s += `<text x="${-(mt+ph/2)}" y="${14}" text-anchor="middle" fill="${o.axisColor}" font-size="${o.fontSize}" font-weight="600" transform="rotate(-90)">${esc(g.yAxis.label)}${g.yAxis.unit?' ('+esc(g.yAxis.unit)+')':''}</text>`;
       }
+
+      // Right y-axis
+      if(hasDual) {
+        // Right axis line
+        s += `<line x1="${ml+pw}" y1="${mt}" x2="${ml+pw}" y2="${mt+ph}" stroke="${o.axisColor}" stroke-width="1.5" stroke-linecap="square"/>`;
+        const yTicksR = (g.yAxisRight?.ticks || linspace(yMinR, yMaxR, 6)).filter(t => t != null && !isNaN(t));
+        yTicksR.forEach(t => {
+          const y = cyR(t);
+          if(y >= mt - 1 && y <= mt + ph + 1) {
+            s += `<line x1="${ml+pw}" y1="${y}" x2="${ml+pw+5}" y2="${y}" stroke="${o.axisColor}" stroke-width="1"/>`;
+            s += `<text x="${ml+pw+8}" y="${y+o.fontSize*0.35}" text-anchor="start" fill="${o.axisColor}" font-size="${o.fontSize*0.9}">${fmt(t)}</text>`;
+          }
+        });
+        if(g.yAxisRight?.label) {
+          s += `<text x="${mt+ph/2}" y="${-(ml+pw+mr-14)}" text-anchor="middle" fill="${o.axisColor}" font-size="${o.fontSize}" font-weight="600" transform="rotate(90)">${esc(g.yAxisRight.label)}${g.yAxisRight.unit?' ('+esc(g.yAxisRight.unit)+')':''}</text>`;
+        }
+      }
     }
   }
 
@@ -1406,8 +1493,8 @@ function buildSvg(g, o) {
     let lx = ml;
     g.series.forEach((ser, si) => {
       const col = o.palette[si % o.palette.length];
-      if(gtype === 'bar') {
-        s += `<rect x="${lx}" y="${ly-7}" width="16" height="10" fill="${col}" fill-opacity="0.85" rx="2"/>`;
+      if(gtype === 'bar' || gtype === 'stacked-bar') {
+        s += `<rect x="${lx}" y="${ly-7}" width="16" height="10" fill="${col}" fill-opacity="0.9" rx="2"/>`;
       } else {
         s += `<line x1="${lx}" y1="${ly}" x2="${lx+20}" y2="${ly}" stroke="${col}" stroke-width="${o.lineThickness}"/>`;
         s += markerSvg(lx+10, ly, o.markerSize*0.8, o.markerShape, col);
