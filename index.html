@@ -1120,7 +1120,8 @@ async function analyseGraph() {
           "x": number_or_category_index,
           "label": "category label string if bar chart, else null",
           "y": number,
-          "errorY": half_error_bar_size_in_data_units_or_null,
+          "errorYUp": upper_error_bar_in_data_units_or_null,
+          "errorYDown": lower_error_bar_in_data_units_or_null,
           "errorX": half_error_bar_size_in_data_units_or_null
         }
       ]
@@ -1131,7 +1132,7 @@ async function analyseGraph() {
 
 CRITICAL RULES:
 1. For BAR CHARTS (bar or stacked-bar): the x-axis uses category labels (strings like "Control", "Treatment A", etc.), NOT numbers. Set "categories" to the ordered list of all category names. Set each point's "label" to its category string and "x" to its 0-based index. IMPORTANT: if bars are stacked on top of each other (segments forming a single tall column per category), use graphType "stacked-bar". If bars are placed side-by-side per category, use "bar". For stacked bars, each series "y" value is the actual segment value (not cumulative) — report the raw size of each coloured segment.
-2. ERROR BARS: Inspect very carefully for error bars — these are vertical (and sometimes horizontal) lines extending above and below data points or bar tops, usually with small horizontal caps at the ends. They represent uncertainty/SD/SEM/CI. If you see them, you MUST report them. "errorY" is the half-height of the bar in data units (i.e. the distance from the point centre to the cap tip, read from the y-axis scale). Do not set errorY to null if error bars are visible.
+2. ERROR BARS: Inspect very carefully for error bars — vertical lines with small horizontal caps extending from data points or bar tops. They represent uncertainty/SD/SEM/CI. You MUST report them if visible. Use "errorYUp" for the upward extent and "errorYDown" for the downward extent, both as positive values in data units (distance from the point to the cap tip, read from the y-axis scale). If bars are SYMMETRIC set both to the same value. If the error bar only goes UP (common on bar charts — a line above the bar top with no line below), set "errorYUp" to the measured value and "errorYDown" to 0. If only going DOWN, set "errorYDown" to the value and "errorYUp" to 0. Never leave both null if error bars are visible.
 3. DUAL Y-AXIS: If the graph has both a left and a right y-axis with different scales (common in combo charts mixing e.g. bar and line), set "dualAxis" to true, populate "yAxisRight" fully, and set each series' "yAxis" to "left" or "right" based on which axis its values correspond to. If there is only one y-axis, set "dualAxis" to false and "yAxisRight" to null.
 4. Be precise: read all values carefully against the axis scales.
 5. Extract ALL data series and ALL data points.`;
@@ -1243,7 +1244,21 @@ function buildSvg(g, o) {
   const xMax = g.xAxis?.max ?? 10;
   // Left axis
   const yMin = g.yAxis?.min ?? 0;
-  const yMax = g.yAxis?.max ?? 10;
+
+  // For stacked bars: compute the true max from summed segment values per category,
+  // so the axis always covers the full stack height regardless of what Claude extracted.
+  let yMax = g.yAxis?.max ?? 10;
+  if(gtype === 'stacked-bar' && g.series?.length) {
+    const nPtsCheck = g.series[0]?.points?.length || 0;
+    let stackMax = 0;
+    for(let pi = 0; pi < nPtsCheck; pi++) {
+      const total = g.series.reduce((sum, ser) => sum + (ser.points?.[pi]?.y ?? 0), 0);
+      if(total > stackMax) stackMax = total;
+    }
+    // Only override if our computed max is meaningfully larger than what Claude gave
+    if(stackMax > yMax * 0.98) yMax = stackMax * 1.05;
+  }
+
   // Right axis
   const yMinR = g.yAxisRight?.min ?? 0;
   const yMaxR = g.yAxisRight?.max ?? 10;
@@ -1284,7 +1299,7 @@ function buildSvg(g, o) {
           s += `<line x1="${x}" y1="${mt}" x2="${x}" y2="${mt+ph}" stroke="${o.gridColor}" stroke-width="1"/>`;
       });
     }
-    const yTicks = (g.yAxis?.ticks || linspace(yMin, yMax, 6)).filter(t => t != null && !isNaN(t));
+    const yTicks = (gtype === 'stacked-bar' ? linspace(yMin, yMax, 6) : (g.yAxis?.ticks || linspace(yMin, yMax, 6))).filter(t => t != null && !isNaN(t));
     yTicks.forEach(t => {
       const y = cy(t);
       if(y >= mt - 1 && y <= mt + ph + 1)
@@ -1320,14 +1335,16 @@ function buildSvg(g, o) {
             s += `<rect x="${bx.toFixed(2)}" y="${by.toFixed(2)}" width="${bw.toFixed(2)}" height="${bh.toFixed(2)}" fill="${col}" fill-opacity="0.85" clip-path="url(#plot)"/>`;
 
             // Error bars on grouped bars
-            if(o.showErrorBars && p.errorY != null) {
+            if(o.showErrorBars && (p.errorYUp != null || p.errorYDown != null || p.errorY != null)) {
               const px = centreX + groupOff;
-              const ey = (p.errorY / (yMaxFor(ser) - yMinFor(ser))) * ph;
+              const scale = yMaxFor(ser) - yMinFor(ser);
+              const eyUp   = ((p.errorYUp   ?? p.errorY ?? 0) / scale) * ph;
+              const eyDown = ((p.errorYDown ?? p.errorY ?? 0) / scale) * ph;
               const capW = Math.min(bw * 0.4, 6);
               s += `<g clip-path="url(#plot)" stroke="${col}" stroke-width="${Math.max(1, o.lineThickness * 0.8)}">`;
-              s += `<line x1="${px.toFixed(2)}" y1="${(by - ey).toFixed(2)}" x2="${px.toFixed(2)}" y2="${(by + ey).toFixed(2)}"/>`;
-              s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by-ey).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(by-ey).toFixed(2)}"/>`;
-              s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by+ey).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(by+ey).toFixed(2)}"/>`;
+              s += `<line x1="${px.toFixed(2)}" y1="${(by - eyUp).toFixed(2)}" x2="${px.toFixed(2)}" y2="${(by + eyDown).toFixed(2)}"/>`;
+              if(eyUp   > 0) s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by-eyUp).toFixed(2)}"   x2="${(px+capW).toFixed(2)}" y2="${(by-eyUp).toFixed(2)}"/>`;
+              if(eyDown > 0) s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by+eyDown).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(by+eyDown).toFixed(2)}"/>`;
               s += `</g>`;
             }
           });
@@ -1349,12 +1366,14 @@ function buildSvg(g, o) {
           pts.forEach(p => {
             const px = cx(p.x), py = cyFor(ser, p.y);
             const capW = 5;
-            if(p.errorY != null) {
-              const ey = (p.errorY / (yMaxFor(ser) - yMinFor(ser))) * ph;
+            if(p.errorYUp != null || p.errorYDown != null || p.errorY != null) {
+              const scale = yMaxFor(ser) - yMinFor(ser);
+              const eyUp   = ((p.errorYUp   ?? p.errorY ?? 0) / scale) * ph;
+              const eyDown = ((p.errorYDown ?? p.errorY ?? 0) / scale) * ph;
               s += `<g clip-path="url(#plot)" stroke="${col}" stroke-width="${Math.max(1, o.lineThickness * 0.75)}">`;
-              s += `<line x1="${px.toFixed(2)}" y1="${(py-ey).toFixed(2)}" x2="${px.toFixed(2)}" y2="${(py+ey).toFixed(2)}"/>`;
-              s += `<line x1="${(px-capW).toFixed(2)}" y1="${(py-ey).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(py-ey).toFixed(2)}"/>`;
-              s += `<line x1="${(px-capW).toFixed(2)}" y1="${(py+ey).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(py+ey).toFixed(2)}"/>`;
+              s += `<line x1="${px.toFixed(2)}" y1="${(py-eyUp).toFixed(2)}" x2="${px.toFixed(2)}" y2="${(py+eyDown).toFixed(2)}"/>`;
+              if(eyUp   > 0) s += `<line x1="${(px-capW).toFixed(2)}" y1="${(py-eyUp).toFixed(2)}"   x2="${(px+capW).toFixed(2)}" y2="${(py-eyUp).toFixed(2)}"/>`;
+              if(eyDown > 0) s += `<line x1="${(px-capW).toFixed(2)}" y1="${(py+eyDown).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(py+eyDown).toFixed(2)}"/>`;
               s += `</g>`;
             }
             if(p.errorX != null) {
@@ -1404,14 +1423,16 @@ function buildSvg(g, o) {
           s += `<line x1="${bx.toFixed(2)}" y1="${by.toFixed(2)}" x2="${(bx+bw).toFixed(2)}" y2="${by.toFixed(2)}" stroke="${o.bgColor}" stroke-width="1.5" clip-path="url(#plot)"/>`;
         }
         // Error bars on top segment only (last series)
-        if(o.showErrorBars && p.errorY != null && si === g.series.length - 1) {
+        if(o.showErrorBars && (p.errorYUp != null || p.errorYDown != null || p.errorY != null) && si === g.series.length - 1) {
           const px = centreX;
-          const ey = (p.errorY / (yMaxFor(ser) - yMinFor(ser))) * ph;
+          const scale = yMaxFor(ser) - yMinFor(ser);
+          const eyUp   = ((p.errorYUp   ?? p.errorY ?? 0) / scale) * ph;
+          const eyDown = ((p.errorYDown ?? p.errorY ?? 0) / scale) * ph;
           const capW = Math.min(bw * 0.3, 6);
           s += `<g clip-path="url(#plot)" stroke="${col}" stroke-width="${Math.max(1, o.lineThickness * 0.8)}">`;
-          s += `<line x1="${px.toFixed(2)}" y1="${(by - ey).toFixed(2)}" x2="${px.toFixed(2)}" y2="${(by + ey).toFixed(2)}"/>`;
-          s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by-ey).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(by-ey).toFixed(2)}"/>`;
-          s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by+ey).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(by+ey).toFixed(2)}"/>`;
+          s += `<line x1="${px.toFixed(2)}" y1="${(by - eyUp).toFixed(2)}" x2="${px.toFixed(2)}" y2="${(by + eyDown).toFixed(2)}"/>`;
+          if(eyUp   > 0) s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by-eyUp).toFixed(2)}"   x2="${(px+capW).toFixed(2)}" y2="${(by-eyUp).toFixed(2)}"/>`;
+          if(eyDown > 0) s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by+eyDown).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(by+eyDown).toFixed(2)}"/>`;
           s += `</g>`;
         }
         cumulative += val;
@@ -1448,7 +1469,7 @@ function buildSvg(g, o) {
       }
 
       // Y ticks
-      const yTicks = (g.yAxis?.ticks || linspace(yMin, yMax, 6)).filter(t => t != null && !isNaN(t));
+      const yTicks = (gtype === 'stacked-bar' ? linspace(yMin, yMax, 6) : (g.yAxis?.ticks || linspace(yMin, yMax, 6))).filter(t => t != null && !isNaN(t));
       yTicks.forEach(t => {
         const y = cy(t);
         s += `<line x1="${ml-5}" y1="${y}" x2="${ml}" y2="${y}" stroke="${o.axisColor}" stroke-width="1"/>`;
@@ -1541,7 +1562,7 @@ function populateDataTable() {
   parsedGraph.series.forEach((ser, si) => {
     const col = seriesPalette[si % seriesPalette.length];
     html += `<div class="series-item"><div class="series-dot" style="background:${col}"></div><strong style="font-size:12px;color:#ccc">${esc(ser.name || 'Series '+(si+1))}</strong></div>`;
-    html += `<div class="data-scroll"><table class="data-table"><thead><tr><th>x</th><th>y</th><th>±y</th><th>±x</th></tr></thead><tbody>`;
+    html += `<div class="data-scroll"><table class="data-table"><thead><tr><th>x</th><th>y</th><th>↑ err</th><th>↓ err</th><th>±x</th></tr></thead><tbody>`;
     (ser.points||[]).forEach(p => {
       html += `<tr><td>${fmt(p.x)}</td><td>${fmt(p.y)}</td><td>${p.errorY!=null?fmt(p.errorY):'—'}</td><td>${p.errorX!=null?fmt(p.errorX):'—'}</td></tr>`;
     });
