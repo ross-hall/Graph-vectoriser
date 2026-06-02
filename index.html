@@ -1091,6 +1091,7 @@ async function analyseGraph() {
   "xAxis": {
     "label": "x axis title/label text or null",
     "unit": "unit if visible or null",
+    "scale": "linear or log",
     "min": number_or_null,
     "max": number_or_null,
     "ticks": [list of numeric tick values, or null if categorical]
@@ -1098,6 +1099,7 @@ async function analyseGraph() {
   "yAxis": {
     "label": "left y axis title/label text or null",
     "unit": "unit if visible or null",
+    "scale": "linear or log",
     "min": number,
     "max": number,
     "ticks": [list of numeric tick values]
@@ -1105,6 +1107,7 @@ async function analyseGraph() {
   "yAxisRight": {
     "label": "right y axis title/label text or null (set to null if no right axis)",
     "unit": "unit if visible or null",
+    "scale": "linear or log",
     "min": number_or_null,
     "max": number_or_null,
     "ticks": [list of numeric tick values, or null if no right axis]
@@ -1134,8 +1137,9 @@ CRITICAL RULES:
 1. For BAR CHARTS (bar or stacked-bar): the x-axis uses category labels (strings like "Control", "Treatment A", etc.), NOT numbers. Set "categories" to the ordered list of all category names. Set each point's "label" to its category string and "x" to its 0-based index. IMPORTANT: if bars are stacked on top of each other (segments forming a single tall column per category), use graphType "stacked-bar". If bars are placed side-by-side per category, use "bar". For stacked bars, each series "y" value is the actual segment value (not cumulative) — report the raw size of each coloured segment.
 2. ERROR BARS: Inspect very carefully for error bars — vertical lines with small horizontal caps extending from data points or bar tops. They represent uncertainty/SD/SEM/CI. You MUST report them if visible. Use "errorYUp" for the upward extent and "errorYDown" for the downward extent, both as positive values in data units (distance from the point to the cap tip, read from the y-axis scale). If bars are SYMMETRIC set both to the same value. If the error bar only goes UP (common on bar charts — a line above the bar top with no line below), set "errorYUp" to the measured value and "errorYDown" to 0. If only going DOWN, set "errorYDown" to the value and "errorYUp" to 0. Never leave both null if error bars are visible.
 3. DUAL Y-AXIS: If the graph has both a left and a right y-axis with different scales (common in combo charts mixing e.g. bar and line), set "dualAxis" to true, populate "yAxisRight" fully, and set each series' "yAxis" to "left" or "right" based on which axis its values correspond to. If there is only one y-axis, set "dualAxis" to false and "yAxisRight" to null.
-4. Be precise: read all values carefully against the axis scales.
-5. Extract ALL data series and ALL data points.`;
+4. LOGARITHMIC AXES: Look carefully at the tick spacing and labels. A log axis has ticks at powers of 10 (0.001, 0.01, 0.1, 1, 10, 100…) or other multiplicative intervals, and the visual spacing between ticks is unequal (compressed at the top). If an axis is logarithmic, set its "scale" to "log". Report all tick values as actual numbers (not exponents). The "min" value must be greater than 0 for log axes.
+5. Be precise: read all values carefully against the axis scales.
+6. Extract ALL data series and ALL data points.`;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1242,11 +1246,13 @@ function buildSvg(g, o) {
 
   const xMin = g.xAxis?.min ?? 0;
   const xMax = g.xAxis?.max ?? 10;
+  const xLog = g.xAxis?.scale === 'log';
+
   // Left axis
   const yMin = g.yAxis?.min ?? 0;
+  const yLog = g.yAxis?.scale === 'log';
 
-  // For stacked bars: compute the true max from summed segment values per category,
-  // so the axis always covers the full stack height regardless of what Claude extracted.
+  // For stacked bars: compute the true max from summed segment values per category
   let yMax = g.yAxis?.max ?? 10;
   if(gtype === 'stacked-bar' && g.series?.length) {
     const nPtsCheck = g.series[0]?.points?.length || 0;
@@ -1255,26 +1261,67 @@ function buildSvg(g, o) {
       const total = g.series.reduce((sum, ser) => sum + (ser.points?.[pi]?.y ?? 0), 0);
       if(total > stackMax) stackMax = total;
     }
-    // Only override if our computed max is meaningfully larger than what Claude gave
     if(stackMax > yMax * 0.98) yMax = stackMax * 1.05;
   }
 
   // Right axis
   const yMinR = g.yAxisRight?.min ?? 0;
   const yMaxR = g.yAxisRight?.max ?? 10;
+  const yLogR = g.yAxisRight?.scale === 'log';
 
   // Categorical x: evenly spaced slots
   function catX(i) { return ml + (i + 0.5) * (pw / nCats); }
-  // Numeric x
-  function cx(v) { if(v == null || isNaN(v)) return ml; return ml + ((v - xMin) / (xMax - xMin)) * pw; }
-  // Left y
-  function cy(v) { if(v == null || isNaN(v)) return mt + ph; return mt + ph - ((v - yMin) / (yMax - yMin)) * ph; }
-  // Right y
-  function cyR(v) { if(v == null || isNaN(v)) return mt + ph; return mt + ph - ((v - yMinR) / (yMaxR - yMinR)) * ph; }
+
+  // Numeric x (linear or log)
+  function cx(v) {
+    if(v == null || isNaN(v)) return ml;
+    if(xLog) {
+      if(v <= 0) return ml;
+      return ml + (Math.log10(v) - Math.log10(xMin)) / (Math.log10(xMax) - Math.log10(xMin)) * pw;
+    }
+    return ml + ((v - xMin) / (xMax - xMin)) * pw;
+  }
+
+  // Left y (linear or log)
+  function cy(v) {
+    if(v == null || isNaN(v)) return mt + ph;
+    if(yLog) {
+      if(v <= 0) return mt + ph;
+      return mt + ph - (Math.log10(v) - Math.log10(yMin)) / (Math.log10(yMax) - Math.log10(yMin)) * ph;
+    }
+    return mt + ph - ((v - yMin) / (yMax - yMin)) * ph;
+  }
+
+  // Right y (linear or log)
+  function cyR(v) {
+    if(v == null || isNaN(v)) return mt + ph;
+    if(yLogR) {
+      if(v <= 0) return mt + ph;
+      return mt + ph - (Math.log10(v) - Math.log10(yMinR)) / (Math.log10(yMaxR) - Math.log10(yMinR)) * ph;
+    }
+    return mt + ph - ((v - yMinR) / (yMaxR - yMinR)) * ph;
+  }
+
   // Pick correct cy for a series
   function cyFor(ser, v) { return (hasDual && ser.yAxis === 'right') ? cyR(v) : cy(v); }
   function yMinFor(ser) { return (hasDual && ser.yAxis === 'right') ? yMinR : yMin; }
   function yMaxFor(ser) { return (hasDual && ser.yAxis === 'right') ? yMaxR : yMax; }
+  function yLogFor(ser) { return (hasDual && ser.yAxis === 'right') ? yLogR : yLog; }
+
+  // For log axes, error bar scaling must use log-space distance not linear
+  function errPx(ser, centre, errVal, direction) {
+    // direction: +1 = up (decreasing y pixel), -1 = down (increasing y pixel)
+    if(!errVal || errVal === 0) return cyFor(ser, centre);
+    if(yLogFor(ser)) {
+      const target = direction > 0 ? centre * Math.pow(10, errVal / centre) : centre / Math.pow(10, errVal / centre);
+      // Simpler: treat errVal as already in data units, project linearly in log space
+      const logCentre = Math.log10(centre);
+      const logRange = Math.log10(yMaxFor(ser)) - Math.log10(yMinFor(ser));
+      const logErrFrac = (errVal / centre) / Math.LN10; // approximate: d(log10 v) ≈ dv / (v * ln10)
+      return cyFor(ser, centre) - direction * (logErrFrac / logRange) * ph;
+    }
+    return cyFor(ser, centre) - direction * (errVal / (yMaxFor(ser) - yMinFor(ser))) * ph;
+  }
 
   const dashMap = { solid: 'none', dashed: `${o.lineThickness*3},${o.lineThickness*2}`, dotted: `${o.lineThickness},${o.lineThickness*2}` };
   const dash = dashMap[o.lineStyle] || 'none';
@@ -1299,7 +1346,7 @@ function buildSvg(g, o) {
           s += `<line x1="${x}" y1="${mt}" x2="${x}" y2="${mt+ph}" stroke="${o.gridColor}" stroke-width="1"/>`;
       });
     }
-    const yTicks = (gtype === 'stacked-bar' ? linspace(yMin, yMax, 6) : (g.yAxis?.ticks || linspace(yMin, yMax, 6))).filter(t => t != null && !isNaN(t));
+    const yTicks = (yLog ? (g.yAxis?.ticks || logTicks(yMin, yMax)) : (gtype === 'stacked-bar' ? linspace(yMin, yMax, 6) : (g.yAxis?.ticks || linspace(yMin, yMax, 6)))).filter(t => t != null && !isNaN(t) && t > 0 || !yLog);
     yTicks.forEach(t => {
       const y = cy(t);
       if(y >= mt - 1 && y <= mt + ph + 1)
@@ -1337,14 +1384,13 @@ function buildSvg(g, o) {
             // Error bars on grouped bars
             if(o.showErrorBars && (p.errorYUp != null || p.errorYDown != null || p.errorY != null)) {
               const px = centreX + groupOff;
-              const scale = yMaxFor(ser) - yMinFor(ser);
-              const eyUp   = ((p.errorYUp   ?? p.errorY ?? 0) / scale) * ph;
-              const eyDown = ((p.errorYDown ?? p.errorY ?? 0) / scale) * ph;
+              const errUpY   = errPx(ser, p.y, p.errorYUp   ?? p.errorY ?? 0,  1);
+              const errDownY = errPx(ser, p.y, p.errorYDown ?? p.errorY ?? 0, -1);
               const capW = Math.min(bw * 0.4, 6);
               s += `<g clip-path="url(#plot)" stroke="${col}" stroke-width="${Math.max(1, o.lineThickness * 0.8)}">`;
-              s += `<line x1="${px.toFixed(2)}" y1="${(by - eyUp).toFixed(2)}" x2="${px.toFixed(2)}" y2="${(by + eyDown).toFixed(2)}"/>`;
-              if(eyUp   > 0) s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by-eyUp).toFixed(2)}"   x2="${(px+capW).toFixed(2)}" y2="${(by-eyUp).toFixed(2)}"/>`;
-              if(eyDown > 0) s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by+eyDown).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(by+eyDown).toFixed(2)}"/>`;
+              s += `<line x1="${px.toFixed(2)}" y1="${errUpY.toFixed(2)}" x2="${px.toFixed(2)}" y2="${errDownY.toFixed(2)}"/>`;
+              if(errUpY   < by) s += `<line x1="${(px-capW).toFixed(2)}" y1="${errUpY.toFixed(2)}"   x2="${(px+capW).toFixed(2)}" y2="${errUpY.toFixed(2)}"/>`;
+              if(errDownY > by) s += `<line x1="${(px-capW).toFixed(2)}" y1="${errDownY.toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${errDownY.toFixed(2)}"/>`;
               s += `</g>`;
             }
           });
@@ -1367,13 +1413,12 @@ function buildSvg(g, o) {
             const px = cx(p.x), py = cyFor(ser, p.y);
             const capW = 5;
             if(p.errorYUp != null || p.errorYDown != null || p.errorY != null) {
-              const scale = yMaxFor(ser) - yMinFor(ser);
-              const eyUp   = ((p.errorYUp   ?? p.errorY ?? 0) / scale) * ph;
-              const eyDown = ((p.errorYDown ?? p.errorY ?? 0) / scale) * ph;
+              const errUpY   = errPx(ser, p.y, p.errorYUp   ?? p.errorY ?? 0,  1);
+              const errDownY = errPx(ser, p.y, p.errorYDown ?? p.errorY ?? 0, -1);
               s += `<g clip-path="url(#plot)" stroke="${col}" stroke-width="${Math.max(1, o.lineThickness * 0.75)}">`;
-              s += `<line x1="${px.toFixed(2)}" y1="${(py-eyUp).toFixed(2)}" x2="${px.toFixed(2)}" y2="${(py+eyDown).toFixed(2)}"/>`;
-              if(eyUp   > 0) s += `<line x1="${(px-capW).toFixed(2)}" y1="${(py-eyUp).toFixed(2)}"   x2="${(px+capW).toFixed(2)}" y2="${(py-eyUp).toFixed(2)}"/>`;
-              if(eyDown > 0) s += `<line x1="${(px-capW).toFixed(2)}" y1="${(py+eyDown).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(py+eyDown).toFixed(2)}"/>`;
+              s += `<line x1="${px.toFixed(2)}" y1="${errUpY.toFixed(2)}" x2="${px.toFixed(2)}" y2="${errDownY.toFixed(2)}"/>`;
+              if(errUpY   < py) s += `<line x1="${(px-capW).toFixed(2)}" y1="${errUpY.toFixed(2)}"   x2="${(px+capW).toFixed(2)}" y2="${errUpY.toFixed(2)}"/>`;
+              if(errDownY > py) s += `<line x1="${(px-capW).toFixed(2)}" y1="${errDownY.toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${errDownY.toFixed(2)}"/>`;
               s += `</g>`;
             }
             if(p.errorX != null) {
@@ -1425,14 +1470,13 @@ function buildSvg(g, o) {
         // Error bars on top segment only (last series)
         if(o.showErrorBars && (p.errorYUp != null || p.errorYDown != null || p.errorY != null) && si === g.series.length - 1) {
           const px = centreX;
-          const scale = yMaxFor(ser) - yMinFor(ser);
-          const eyUp   = ((p.errorYUp   ?? p.errorY ?? 0) / scale) * ph;
-          const eyDown = ((p.errorYDown ?? p.errorY ?? 0) / scale) * ph;
+          const errUpY   = errPx(ser, p.y, p.errorYUp   ?? p.errorY ?? 0,  1);
+          const errDownY = errPx(ser, p.y, p.errorYDown ?? p.errorY ?? 0, -1);
           const capW = Math.min(bw * 0.3, 6);
           s += `<g clip-path="url(#plot)" stroke="${col}" stroke-width="${Math.max(1, o.lineThickness * 0.8)}">`;
-          s += `<line x1="${px.toFixed(2)}" y1="${(by - eyUp).toFixed(2)}" x2="${px.toFixed(2)}" y2="${(by + eyDown).toFixed(2)}"/>`;
-          if(eyUp   > 0) s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by-eyUp).toFixed(2)}"   x2="${(px+capW).toFixed(2)}" y2="${(by-eyUp).toFixed(2)}"/>`;
-          if(eyDown > 0) s += `<line x1="${(px-capW).toFixed(2)}" y1="${(by+eyDown).toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${(by+eyDown).toFixed(2)}"/>`;
+          s += `<line x1="${px.toFixed(2)}" y1="${errUpY.toFixed(2)}" x2="${px.toFixed(2)}" y2="${errDownY.toFixed(2)}"/>`;
+          if(errUpY   < by) s += `<line x1="${(px-capW).toFixed(2)}" y1="${errUpY.toFixed(2)}"   x2="${(px+capW).toFixed(2)}" y2="${errUpY.toFixed(2)}"/>`;
+          if(errDownY > by) s += `<line x1="${(px-capW).toFixed(2)}" y1="${errDownY.toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${errDownY.toFixed(2)}"/>`;
           s += `</g>`;
         }
         cumulative += val;
@@ -1469,7 +1513,7 @@ function buildSvg(g, o) {
       }
 
       // Y ticks
-      const yTicks = (gtype === 'stacked-bar' ? linspace(yMin, yMax, 6) : (g.yAxis?.ticks || linspace(yMin, yMax, 6))).filter(t => t != null && !isNaN(t));
+      const yTicks = (yLog ? (g.yAxis?.ticks || logTicks(yMin, yMax)) : (gtype === 'stacked-bar' ? linspace(yMin, yMax, 6) : (g.yAxis?.ticks || linspace(yMin, yMax, 6)))).filter(t => t != null && !isNaN(t) && t > 0 || !yLog);
       yTicks.forEach(t => {
         const y = cy(t);
         s += `<line x1="${ml-5}" y1="${y}" x2="${ml}" y2="${y}" stroke="${o.axisColor}" stroke-width="1"/>`;
@@ -1481,14 +1525,14 @@ function buildSvg(g, o) {
         s += `<text x="${ml+pw/2}" y="${H-8}" text-anchor="middle" fill="${o.axisColor}" font-size="${o.fontSize}" font-weight="600">${esc(g.xAxis.label)}${g.xAxis.unit?' ('+esc(g.xAxis.unit)+')':''}</text>`;
       }
       if(g.yAxis?.label) {
-        s += `<text x="${-(mt+ph/2)}" y="${14}" text-anchor="middle" fill="${o.axisColor}" font-size="${o.fontSize}" font-weight="600" transform="rotate(-90)">${esc(g.yAxis.label)}${g.yAxis.unit?' ('+esc(g.yAxis.unit)+')':''}</text>`;
+        s += `<text x="${-(mt+ph/2)}" y="${14}" text-anchor="middle" fill="${o.axisColor}" font-size="${o.fontSize}" font-weight="600" transform="rotate(-90)">${esc(g.yAxis.label)}${g.yAxis.unit?' ('+esc(g.yAxis.unit)+')':(yLog?' (log)':'')}</text>`;
       }
 
       // Right y-axis
       if(hasDual) {
         // Right axis line
         s += `<line x1="${ml+pw}" y1="${mt}" x2="${ml+pw}" y2="${mt+ph}" stroke="${o.axisColor}" stroke-width="1.5" stroke-linecap="square"/>`;
-        const yTicksR = (g.yAxisRight?.ticks || linspace(yMinR, yMaxR, 6)).filter(t => t != null && !isNaN(t));
+        const yTicksR = (yLogR ? (g.yAxisRight?.ticks || logTicks(yMinR, yMaxR)) : (g.yAxisRight?.ticks || linspace(yMinR, yMaxR, 6))).filter(t => t != null && !isNaN(t));
         yTicksR.forEach(t => {
           const y = cyR(t);
           if(y >= mt - 1 && y <= mt + ph + 1) {
@@ -1538,6 +1582,27 @@ function markerSvg(x, y, r, shape, col) {
     case 'cross': return `<g stroke="${col}" stroke-width="${Math.max(1.5,r/2)}" stroke-linecap="round" clip-path="url(#plot)"><line x1="${x-r}" y1="${y-r}" x2="${x+r}" y2="${y+r}"/><line x1="${x+r}" y1="${y-r}" x2="${x-r}" y2="${y+r}"/></g>`;
     default: return `<circle cx="${x}" cy="${y}" r="${r}" ${filled} clip-path="url(#plot)"/>`;
   }
+}
+
+function logTicks(a, b) {
+  // Generate ticks at powers of 10 between a and b
+  if(a <= 0) a = 1e-10;
+  const lo = Math.floor(Math.log10(a));
+  const hi = Math.ceil(Math.log10(b));
+  const ticks = [];
+  for(let e = lo; e <= hi; e++) {
+    ticks.push(Math.pow(10, e));
+  }
+  // If very few decades, add intermediate values (2, 5 per decade)
+  if(ticks.length <= 2) {
+    const extra = [];
+    for(let e = lo; e < hi; e++) {
+      extra.push(2 * Math.pow(10, e));
+      extra.push(5 * Math.pow(10, e));
+    }
+    return [...ticks, ...extra].filter(t => t >= a && t <= b).sort((a,b) => a-b);
+  }
+  return ticks.filter(t => t >= a * 0.999 && t <= b * 1.001);
 }
 
 function linspace(a, b, n) {
