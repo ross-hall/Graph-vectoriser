@@ -667,7 +667,7 @@
     <h1>Graph Vectoriser</h1>
   </div>
   <span class="badge">AI-Powered</span>
-  <span class="badge" style="margin-left:auto;color:var(--accent);border-color:var(--accent);background:rgba(232,255,71,0.06)">v2.0</span>
+  <span class="badge" style="margin-left:auto;color:var(--accent);border-color:var(--accent);background:rgba(232,255,71,0.06)">v2.1</span>
 </header>
 
 <div class="main">
@@ -767,6 +767,7 @@
           <option value="scatter">Scatter plot</option>
           <option value="bar">Bar chart (grouped)</option>
           <option value="stacked-bar">Bar chart (stacked)</option>
+          <option value="box">Box &amp; whisker</option>
           <option value="area">Area chart</option>
         </select>
       </div>
@@ -1164,7 +1165,7 @@ async function analyseGraph() {
 
 {
   "title": "graph title if visible, else null",
-  "graphType": "line|scatter|bar|stacked-bar|area",
+  "graphType": "line|scatter|bar|stacked-bar|box|area",
   "dualAxis": true_or_false,
   "xAxis": {
     "label": "x axis title/label text or null",
@@ -1196,15 +1197,21 @@ async function analyseGraph() {
       "name": "series name from legend or 'Series 1'",
       "color": "detected hex color e.g. #2563eb or null",
       "yAxis": "left or right",
-      "seriesType": "scatter|line|bestfit|bar",
+      "seriesType": "scatter|line|bestfit|bar|box",
       "points": [
         {
           "x": number_or_category_index,
-          "label": "category label string if bar chart, else null",
+          "label": "category label string if bar/box chart, else null",
           "y": number,
           "errorYUp": upper_error_bar_in_data_units_or_null,
           "errorYDown": lower_error_bar_in_data_units_or_null,
-          "errorX": half_error_bar_size_in_data_units_or_null
+          "errorX": half_error_bar_size_in_data_units_or_null,
+          "q1": number_or_null,
+          "median": number_or_null,
+          "q3": number_or_null,
+          "whiskerLow": number_or_null,
+          "whiskerHigh": number_or_null,
+          "outliers": [number] or null
         }
       ]
     }
@@ -1218,7 +1225,8 @@ CRITICAL RULES:
 3. DUAL Y-AXIS: If the graph has both a left and a right y-axis with different scales (common in combo charts mixing e.g. bar and line), set "dualAxis" to true, populate "yAxisRight" fully, and set each series' "yAxis" to "left" or "right" based on which axis its values correspond to. If there is only one y-axis, set "dualAxis" to false and "yAxisRight" to null.
 4. LOGARITHMIC AXES: Look carefully at the tick spacing and labels. A log axis has ticks at powers of 10 (0.001, 0.01, 0.1, 1, 10, 100…) or other multiplicative intervals, and the visual spacing between ticks is unequal (compressed at the top). If an axis is logarithmic, set its "scale" to "log". Report all tick values as actual numbers (not exponents). The "min" value must be greater than 0 for log axes.
 5. SERIES TYPE: Each series must have a "seriesType". Use "scatter" for individual data points with no connecting line. Use "line" for a series where points are connected by a line. Use "bestfit" ONLY if a trend line, regression line, or line of best fit is VISUALLY PRESENT in the image — do NOT calculate or add one yourself. A best-fit line typically runs smoothly through or near scatter points without passing through each one exactly, and is often drawn in a different colour or style. If you see one, represent it as a separate series with seriesType "bestfit" and extract only the start point, end point, and any visible inflection points (not every scatter point). Use "bar" for bar series.
-6. UNEQUAL SERIES LENGTHS: Different series will often have different numbers of data points. NEVER invent or pad points to make series lengths match. Only report points you can actually see in the graph. It is completely valid and expected for one series to have 3 points and another to have 12.
+6. BOX AND WHISKER PLOTS: If the graph is a box plot, set graphType to "box" and seriesType to "box" for each series. Each box represents one category, so set "categories" as normal. For each point extract: "whiskerLow" (bottom whisker tip), "q1" (bottom of box), "median" (middle line), "q3" (top of box), "whiskerHigh" (top whisker tip), and "outliers" as an array of individual point values shown beyond the whiskers. Set "y" to the median value. Read all values carefully from the y-axis scale.
+7. UNEQUAL SERIES LENGTHS: Different series will often have different numbers of data points. NEVER invent or pad points to make series lengths match. Only report points you can actually see in the graph. It is completely valid and expected for one series to have 3 points and another to have 12.
 7. Be precise: read all values carefully against the axis scales.
 8. Extract ALL real data points. Do not fabricate any.`;
 
@@ -1414,7 +1422,7 @@ function buildSvg(g, o) {
 
   // ── Grid ────────────────────────────────────────────────────────────────
   if(o.showGrid) {
-    if(cats) {
+    if(cats || gtype === 'box') {
       // Vertical grid between categories
       for(let i = 1; i < nCats; i++) {
         const x = ml + i * (pw / nCats);
@@ -1444,7 +1452,48 @@ function buildSvg(g, o) {
       const col = o.palette[si % o.palette.length];
       const pts = ser.points || [];
 
-      if(gtype === 'bar' || gtype === 'stacked-bar') {
+      if(gtype === 'box' || ser.seriesType === 'box') {
+        // Box & whisker rendering
+        const nCatsLocal = cats ? nCats : pts.length;
+        const slotW = pw / Math.max(nCatsLocal, 1);
+        const boxPad = slotW * 0.2;
+        const bw = Math.max(8, (slotW - boxPad * 2) / nSeries - 4);
+        const groupOff = (si - (nSeries - 1) / 2) * (bw + 4);
+        const capW = Math.min(bw * 0.4, 10);
+
+        pts.forEach((p, pi) => {
+          if(p.q1 == null || p.q3 == null || p.median == null) return;
+          const centreX = cats ? catX(p.x ?? pi) : cx(p.x ?? pi);
+          const px = centreX + groupOff;
+
+          const yQ1  = cyFor(ser, p.q1);
+          const yQ3  = cyFor(ser, p.q3);
+          const yMed = cyFor(ser, p.median);
+          const yWL  = p.whiskerLow  != null ? cyFor(ser, p.whiskerLow)  : yQ1;
+          const yWH  = p.whiskerHigh != null ? cyFor(ser, p.whiskerHigh) : yQ3;
+          const x1 = (px - bw / 2).toFixed(2);
+          const x2 = (px + bw / 2).toFixed(2);
+          const strokeW = Math.max(1, o.lineThickness * 0.9);
+
+          // IQR box
+          s += `<rect x="${x1}" y="${yQ3.toFixed(2)}" width="${bw.toFixed(2)}" height="${(yQ1 - yQ3).toFixed(2)}" fill="${col}" fill-opacity="0.25" stroke="${col}" stroke-width="${strokeW}" clip-path="url(#plot)"/>`;
+          // Median line
+          s += `<line x1="${x1}" y1="${yMed.toFixed(2)}" x2="${x2}" y2="${yMed.toFixed(2)}" stroke="${col}" stroke-width="${(strokeW * 2).toFixed(2)}" clip-path="url(#plot)"/>`;
+          // Whisker stems
+          s += `<line x1="${px.toFixed(2)}" y1="${yQ1.toFixed(2)}" x2="${px.toFixed(2)}" y2="${yWL.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" stroke-dasharray="3,2" clip-path="url(#plot)"/>`;
+          s += `<line x1="${px.toFixed(2)}" y1="${yQ3.toFixed(2)}" x2="${px.toFixed(2)}" y2="${yWH.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" stroke-dasharray="3,2" clip-path="url(#plot)"/>`;
+          // Whisker caps
+          s += `<line x1="${(px-capW).toFixed(2)}" y1="${yWL.toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${yWL.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" clip-path="url(#plot)"/>`;
+          s += `<line x1="${(px-capW).toFixed(2)}" y1="${yWH.toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${yWH.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" clip-path="url(#plot)"/>`;
+          // Outliers
+          if(p.outliers?.length) {
+            p.outliers.forEach(ov => {
+              s += markerSvg(px, cyFor(ser, ov), o.markerSize * 0.8, 'circle', col);
+            });
+          }
+        });
+
+      } else if(gtype === 'bar' || gtype === 'stacked-bar') {
         const slotW = cats ? pw / nCats : pw / Math.max(pts.length, 1);
         const groupPad = slotW * 0.15;
 
@@ -1649,7 +1698,48 @@ function buildSvg(g, o) {
     let lx = ml;
     g.series.forEach((ser, si) => {
       const col = o.palette[si % o.palette.length];
-      if(gtype === 'bar' || gtype === 'stacked-bar') {
+      if(gtype === 'box' || ser.seriesType === 'box') {
+        // Box & whisker rendering
+        const nCatsLocal = cats ? nCats : pts.length;
+        const slotW = pw / Math.max(nCatsLocal, 1);
+        const boxPad = slotW * 0.2;
+        const bw = Math.max(8, (slotW - boxPad * 2) / nSeries - 4);
+        const groupOff = (si - (nSeries - 1) / 2) * (bw + 4);
+        const capW = Math.min(bw * 0.4, 10);
+
+        pts.forEach((p, pi) => {
+          if(p.q1 == null || p.q3 == null || p.median == null) return;
+          const centreX = cats ? catX(p.x ?? pi) : cx(p.x ?? pi);
+          const px = centreX + groupOff;
+
+          const yQ1  = cyFor(ser, p.q1);
+          const yQ3  = cyFor(ser, p.q3);
+          const yMed = cyFor(ser, p.median);
+          const yWL  = p.whiskerLow  != null ? cyFor(ser, p.whiskerLow)  : yQ1;
+          const yWH  = p.whiskerHigh != null ? cyFor(ser, p.whiskerHigh) : yQ3;
+          const x1 = (px - bw / 2).toFixed(2);
+          const x2 = (px + bw / 2).toFixed(2);
+          const strokeW = Math.max(1, o.lineThickness * 0.9);
+
+          // IQR box
+          s += `<rect x="${x1}" y="${yQ3.toFixed(2)}" width="${bw.toFixed(2)}" height="${(yQ1 - yQ3).toFixed(2)}" fill="${col}" fill-opacity="0.25" stroke="${col}" stroke-width="${strokeW}" clip-path="url(#plot)"/>`;
+          // Median line
+          s += `<line x1="${x1}" y1="${yMed.toFixed(2)}" x2="${x2}" y2="${yMed.toFixed(2)}" stroke="${col}" stroke-width="${(strokeW * 2).toFixed(2)}" clip-path="url(#plot)"/>`;
+          // Whisker stems
+          s += `<line x1="${px.toFixed(2)}" y1="${yQ1.toFixed(2)}" x2="${px.toFixed(2)}" y2="${yWL.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" stroke-dasharray="3,2" clip-path="url(#plot)"/>`;
+          s += `<line x1="${px.toFixed(2)}" y1="${yQ3.toFixed(2)}" x2="${px.toFixed(2)}" y2="${yWH.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" stroke-dasharray="3,2" clip-path="url(#plot)"/>`;
+          // Whisker caps
+          s += `<line x1="${(px-capW).toFixed(2)}" y1="${yWL.toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${yWL.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" clip-path="url(#plot)"/>`;
+          s += `<line x1="${(px-capW).toFixed(2)}" y1="${yWH.toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${yWH.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" clip-path="url(#plot)"/>`;
+          // Outliers
+          if(p.outliers?.length) {
+            p.outliers.forEach(ov => {
+              s += markerSvg(px, cyFor(ser, ov), o.markerSize * 0.8, 'circle', col);
+            });
+          }
+        });
+
+      } else if(gtype === 'bar' || gtype === 'stacked-bar') {
         s += `<rect x="${lx}" y="${ly-7}" width="16" height="10" fill="${col}" fill-opacity="0.9" rx="2"/>`;
       } else {
         const legStype = ser.seriesType || (gtype === 'scatter' ? 'scatter' : 'line');
@@ -1747,7 +1837,10 @@ function renderDataTable() {
     wrap.className = 'data-scroll';
     const table = document.createElement('table');
     table.className = 'data-table';
-    table.innerHTML = '<thead><tr><th>x</th><th>y</th><th>↑ err</th><th>↓ err</th><th>±x</th><th></th></tr></thead>';
+    const isBoxSer = gtype === 'box' || ser.seriesType === 'box';
+    table.innerHTML = isBoxSer
+      ? '<thead><tr><th>label</th><th>wLow</th><th>Q1</th><th>median</th><th>Q3</th><th>wHigh</th><th></th></tr></thead>'
+      : '<thead><tr><th>x</th><th>y</th><th>↑ err</th><th>↓ err</th><th>±x</th><th></th></tr></thead>';
     const tbody = document.createElement('tbody');
 
     function renderRows() {
@@ -1755,7 +1848,15 @@ function renderDataTable() {
       (ser.points || []).forEach((p, pi) => {
         const tr = document.createElement('tr');
 
-        const fields = [
+        const isBox = gtype === 'box' || ser.seriesType === 'box';
+        const fields = isBox ? [
+          { key: 'label',      val: p.label },
+          { key: 'whiskerLow', val: p.whiskerLow },
+          { key: 'q1',         val: p.q1 },
+          { key: 'median',     val: p.median },
+          { key: 'q3',         val: p.q3 },
+          { key: 'whiskerHigh',val: p.whiskerHigh },
+        ] : [
           { key: 'x',         val: p.x },
           { key: 'y',         val: p.y },
           { key: 'errorYUp',  val: p.errorYUp  ?? p.errorY ?? null },
