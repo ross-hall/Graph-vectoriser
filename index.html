@@ -667,7 +667,7 @@
     <h1>Graph Vectoriser</h1>
   </div>
   <span class="badge">AI-Powered</span>
-  <span class="badge" style="margin-left:auto;color:var(--accent);border-color:var(--accent);background:rgba(232,255,71,0.06)">v1.9</span>
+  <span class="badge" style="margin-left:auto;color:var(--accent);border-color:var(--accent);background:rgba(232,255,71,0.06)">v2.0</span>
 </header>
 
 <div class="main">
@@ -819,6 +819,10 @@
         <input type="checkbox" id="showDataPoints" checked>
         <label for="showDataPoints">Data points (markers)</label>
       </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="showBestFit" checked>
+        <label for="showBestFit">Line of best fit</label>
+      </div>
     </div>
 
     <!-- Line style -->
@@ -955,7 +959,7 @@ const swatchRow = document.getElementById('swatchRow');
 });
 
 // ── Checkboxes & selects trigger regen ────────────────────────────────────
-['showAxes','showGrid','showLabels','showLegend','showErrorBars','showDataPoints',
+['showAxes','showGrid','showLabels','showLegend','showErrorBars','showDataPoints','showBestFit',
  'graphType','lineStyle','markerShape','bgColor','axisColor','gridColor','fontFamily'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => { if(parsedGraph) regenerateSvg(); });
 });
@@ -1213,7 +1217,7 @@ CRITICAL RULES:
 2. ERROR BARS: Inspect very carefully for error bars — vertical lines with small horizontal caps extending from data points or bar tops. They represent uncertainty/SD/SEM/CI. You MUST report them if visible. Use "errorYUp" for the upward extent and "errorYDown" for the downward extent, both as positive values in data units (distance from the point to the cap tip, read from the y-axis scale). If bars are SYMMETRIC set both to the same value. If the error bar only goes UP (common on bar charts — a line above the bar top with no line below), set "errorYUp" to the measured value and "errorYDown" to 0. If only going DOWN, set "errorYDown" to the value and "errorYUp" to 0. Never leave both null if error bars are visible.
 3. DUAL Y-AXIS: If the graph has both a left and a right y-axis with different scales (common in combo charts mixing e.g. bar and line), set "dualAxis" to true, populate "yAxisRight" fully, and set each series' "yAxis" to "left" or "right" based on which axis its values correspond to. If there is only one y-axis, set "dualAxis" to false and "yAxisRight" to null.
 4. LOGARITHMIC AXES: Look carefully at the tick spacing and labels. A log axis has ticks at powers of 10 (0.001, 0.01, 0.1, 1, 10, 100…) or other multiplicative intervals, and the visual spacing between ticks is unequal (compressed at the top). If an axis is logarithmic, set its "scale" to "log". Report all tick values as actual numbers (not exponents). The "min" value must be greater than 0 for log axes.
-5. SERIES TYPE: Each series must have a "seriesType". Use "scatter" for individual data points with no connecting line. Use "line" for a series where points are connected by a line. Use "bestfit" for a trend line, regression line, or line of best fit overlaid on scatter points — these typically run smoothly through the data without hitting every point exactly, and often extend beyond the data range. Use "bar" for bar series. IMPORTANT: if a scatter plot has both discrete points AND a best-fit/trend line, represent them as TWO separate series — one "scatter" and one "bestfit". The "bestfit" series only needs a handful of points (start and end, or a few along the curve) not every data point.
+5. SERIES TYPE: Each series must have a "seriesType". Use "scatter" for individual data points with no connecting line. Use "line" for a series where points are connected by a line. Use "bestfit" ONLY if a trend line, regression line, or line of best fit is VISUALLY PRESENT in the image — do NOT calculate or add one yourself. A best-fit line typically runs smoothly through or near scatter points without passing through each one exactly, and is often drawn in a different colour or style. If you see one, represent it as a separate series with seriesType "bestfit" and extract only the start point, end point, and any visible inflection points (not every scatter point). Use "bar" for bar series.
 6. UNEQUAL SERIES LENGTHS: Different series will often have different numbers of data points. NEVER invent or pad points to make series lengths match. Only report points you can actually see in the graph. It is completely valid and expected for one series to have 3 points and another to have 12.
 7. Be precise: read all values carefully against the axis scales.
 8. Extract ALL real data points. Do not fabricate any.`;
@@ -1282,6 +1286,7 @@ function getStyleOpts() {
     showLegend: document.getElementById('showLegend').checked,
     showErrorBars: document.getElementById('showErrorBars').checked,
     showDataPoints: document.getElementById('showDataPoints').checked,
+    showBestFit: document.getElementById('showBestFit').checked,
     graphType: document.getElementById('graphType').value,
     lineThickness: parseFloat(document.getElementById('lineThickness').value),
     lineStyle: document.getElementById('lineStyle').value,
@@ -1477,7 +1482,7 @@ function buildSvg(g, o) {
         // Determine per-series draw mode
         // seriesType overrides graphType for mixed charts
         const stype = ser.seriesType || (gtype === 'scatter' ? 'scatter' : gtype === 'area' ? 'area' : 'line');
-        const drawLine    = stype === 'line' || stype === 'area' || stype === 'bestfit';
+        const drawLine    = stype === 'line' || stype === 'area' || (stype === 'bestfit' && o.showBestFit);
         const drawMarkers = stype === 'scatter' || stype === 'line';
         // bestfit: thinner dashed line, no markers
         const lineW   = stype === 'bestfit' ? Math.max(1, o.lineThickness * 0.85) : o.lineThickness;
@@ -1648,6 +1653,7 @@ function buildSvg(g, o) {
         s += `<rect x="${lx}" y="${ly-7}" width="16" height="10" fill="${col}" fill-opacity="0.9" rx="2"/>`;
       } else {
         const legStype = ser.seriesType || (gtype === 'scatter' ? 'scatter' : 'line');
+        if(legStype === 'bestfit' && !o.showBestFit) { lx -= 0; return; } // skip hidden bestfit from legend
         const legDash = legStype === 'bestfit' ? `${o.lineThickness*4},${o.lineThickness*2}` : 'none';
         s += `<line x1="${lx}" y1="${ly}" x2="${lx+20}" y2="${ly}" stroke="${col}" stroke-width="${o.lineThickness}" stroke-dasharray="${legDash}"/>`;
         if(legStype !== 'bestfit') s += markerSvg(lx+10, ly, o.markerSize*0.8, o.markerShape, col);
