@@ -1837,7 +1837,10 @@ function renderDataTable() {
     wrap.className = 'data-scroll';
     const table = document.createElement('table');
     table.className = 'data-table';
-    const isBoxSer = gtype === 'box' || ser.seriesType === 'box';
+    const detectedGtype = document.getElementById('graphType').value === 'auto'
+      ? (parsedGraph.graphType || 'line')
+      : document.getElementById('graphType').value;
+    const isBoxSer = detectedGtype === 'box' || ser.seriesType === 'box';
     table.innerHTML = isBoxSer
       ? '<thead><tr><th>label</th><th>wLow</th><th>Q1</th><th>median</th><th>Q3</th><th>wHigh</th><th></th></tr></thead>'
       : '<thead><tr><th>x</th><th>y</th><th>↑ err</th><th>↓ err</th><th>±x</th><th></th></tr></thead>';
@@ -1848,7 +1851,7 @@ function renderDataTable() {
       (ser.points || []).forEach((p, pi) => {
         const tr = document.createElement('tr');
 
-        const isBox = gtype === 'box' || ser.seriesType === 'box';
+        const isBox = detectedGtype === 'box' || ser.seriesType === 'box';
         const fields = isBox ? [
           { key: 'label',      val: p.label },
           { key: 'whiskerLow', val: p.whiskerLow },
