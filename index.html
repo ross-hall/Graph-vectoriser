@@ -1453,46 +1453,9 @@ function buildSvg(g, o) {
       const pts = ser.points || [];
 
       if(gtype === 'box' || ser.seriesType === 'box') {
-        // Box & whisker rendering
-        const nCatsLocal = cats ? nCats : pts.length;
-        const slotW = pw / Math.max(nCatsLocal, 1);
-        const boxPad = slotW * 0.2;
-        const bw = Math.max(8, (slotW - boxPad * 2) / nSeries - 4);
-        const groupOff = (si - (nSeries - 1) / 2) * (bw + 4);
-        const capW = Math.min(bw * 0.4, 10);
-
-        pts.forEach((p, pi) => {
-          if(p.q1 == null || p.q3 == null || p.median == null) return;
-          const centreX = cats ? catX(p.x ?? pi) : cx(p.x ?? pi);
-          const px = centreX + groupOff;
-
-          const yQ1  = cyFor(ser, p.q1);
-          const yQ3  = cyFor(ser, p.q3);
-          const yMed = cyFor(ser, p.median);
-          const yWL  = p.whiskerLow  != null ? cyFor(ser, p.whiskerLow)  : yQ1;
-          const yWH  = p.whiskerHigh != null ? cyFor(ser, p.whiskerHigh) : yQ3;
-          const x1 = (px - bw / 2).toFixed(2);
-          const x2 = (px + bw / 2).toFixed(2);
-          const strokeW = Math.max(1, o.lineThickness * 0.9);
-
-          // IQR box
-          s += `<rect x="${x1}" y="${yQ3.toFixed(2)}" width="${bw.toFixed(2)}" height="${(yQ1 - yQ3).toFixed(2)}" fill="${col}" fill-opacity="0.25" stroke="${col}" stroke-width="${strokeW}" clip-path="url(#plot)"/>`;
-          // Median line
-          s += `<line x1="${x1}" y1="${yMed.toFixed(2)}" x2="${x2}" y2="${yMed.toFixed(2)}" stroke="${col}" stroke-width="${(strokeW * 2).toFixed(2)}" clip-path="url(#plot)"/>`;
-          // Whisker stems
-          s += `<line x1="${px.toFixed(2)}" y1="${yQ1.toFixed(2)}" x2="${px.toFixed(2)}" y2="${yWL.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" stroke-dasharray="3,2" clip-path="url(#plot)"/>`;
-          s += `<line x1="${px.toFixed(2)}" y1="${yQ3.toFixed(2)}" x2="${px.toFixed(2)}" y2="${yWH.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" stroke-dasharray="3,2" clip-path="url(#plot)"/>`;
-          // Whisker caps
-          s += `<line x1="${(px-capW).toFixed(2)}" y1="${yWL.toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${yWL.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" clip-path="url(#plot)"/>`;
-          s += `<line x1="${(px-capW).toFixed(2)}" y1="${yWH.toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${yWH.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" clip-path="url(#plot)"/>`;
-          // Outliers
-          if(p.outliers?.length) {
-            p.outliers.forEach(ov => {
-              s += markerSvg(px, cyFor(ser, ov), o.markerSize * 0.8, 'circle', col);
-            });
-          }
-        });
-
+        // Legend swatch: small box with median line
+        s += `<rect x="${lx}" y="${ly-5}" width="14" height="10" fill="${col}" fill-opacity="0.25" stroke="${col}" stroke-width="1.5" rx="1"/>`;
+        s += `<line x1="${lx}" y1="${ly}" x2="${lx+14}" y2="${ly}" stroke="${col}" stroke-width="2"/>`;
       } else if(gtype === 'bar' || gtype === 'stacked-bar') {
         const slotW = cats ? pw / nCats : pw / Math.max(pts.length, 1);
         const groupPad = slotW * 0.15;
@@ -1699,46 +1662,9 @@ function buildSvg(g, o) {
     g.series.forEach((ser, si) => {
       const col = o.palette[si % o.palette.length];
       if(gtype === 'box' || ser.seriesType === 'box') {
-        // Box & whisker rendering
-        const nCatsLocal = cats ? nCats : pts.length;
-        const slotW = pw / Math.max(nCatsLocal, 1);
-        const boxPad = slotW * 0.2;
-        const bw = Math.max(8, (slotW - boxPad * 2) / nSeries - 4);
-        const groupOff = (si - (nSeries - 1) / 2) * (bw + 4);
-        const capW = Math.min(bw * 0.4, 10);
-
-        pts.forEach((p, pi) => {
-          if(p.q1 == null || p.q3 == null || p.median == null) return;
-          const centreX = cats ? catX(p.x ?? pi) : cx(p.x ?? pi);
-          const px = centreX + groupOff;
-
-          const yQ1  = cyFor(ser, p.q1);
-          const yQ3  = cyFor(ser, p.q3);
-          const yMed = cyFor(ser, p.median);
-          const yWL  = p.whiskerLow  != null ? cyFor(ser, p.whiskerLow)  : yQ1;
-          const yWH  = p.whiskerHigh != null ? cyFor(ser, p.whiskerHigh) : yQ3;
-          const x1 = (px - bw / 2).toFixed(2);
-          const x2 = (px + bw / 2).toFixed(2);
-          const strokeW = Math.max(1, o.lineThickness * 0.9);
-
-          // IQR box
-          s += `<rect x="${x1}" y="${yQ3.toFixed(2)}" width="${bw.toFixed(2)}" height="${(yQ1 - yQ3).toFixed(2)}" fill="${col}" fill-opacity="0.25" stroke="${col}" stroke-width="${strokeW}" clip-path="url(#plot)"/>`;
-          // Median line
-          s += `<line x1="${x1}" y1="${yMed.toFixed(2)}" x2="${x2}" y2="${yMed.toFixed(2)}" stroke="${col}" stroke-width="${(strokeW * 2).toFixed(2)}" clip-path="url(#plot)"/>`;
-          // Whisker stems
-          s += `<line x1="${px.toFixed(2)}" y1="${yQ1.toFixed(2)}" x2="${px.toFixed(2)}" y2="${yWL.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" stroke-dasharray="3,2" clip-path="url(#plot)"/>`;
-          s += `<line x1="${px.toFixed(2)}" y1="${yQ3.toFixed(2)}" x2="${px.toFixed(2)}" y2="${yWH.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" stroke-dasharray="3,2" clip-path="url(#plot)"/>`;
-          // Whisker caps
-          s += `<line x1="${(px-capW).toFixed(2)}" y1="${yWL.toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${yWL.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" clip-path="url(#plot)"/>`;
-          s += `<line x1="${(px-capW).toFixed(2)}" y1="${yWH.toFixed(2)}" x2="${(px+capW).toFixed(2)}" y2="${yWH.toFixed(2)}" stroke="${col}" stroke-width="${strokeW}" clip-path="url(#plot)"/>`;
-          // Outliers
-          if(p.outliers?.length) {
-            p.outliers.forEach(ov => {
-              s += markerSvg(px, cyFor(ser, ov), o.markerSize * 0.8, 'circle', col);
-            });
-          }
-        });
-
+        // Legend swatch: small box with median line
+        s += `<rect x="${lx}" y="${ly-5}" width="14" height="10" fill="${col}" fill-opacity="0.25" stroke="${col}" stroke-width="1.5" rx="1"/>`;
+        s += `<line x1="${lx}" y1="${ly}" x2="${lx+14}" y2="${ly}" stroke="${col}" stroke-width="2"/>`;
       } else if(gtype === 'bar' || gtype === 'stacked-bar') {
         s += `<rect x="${lx}" y="${ly-7}" width="16" height="10" fill="${col}" fill-opacity="0.9" rx="2"/>`;
       } else {
